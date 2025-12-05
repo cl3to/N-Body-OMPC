@@ -3,10 +3,11 @@ CC = clang
 CFLAGS = -fopenmp -fopenmp-targets=nvptx64 \
          -O3 -Wall -g
 #          -Xopenmp-target=nvptx64 -march=sm_86
+# x86_64-pc-linux-gnu
 LDFLAGS = -lm
 
 # Source files and target (ajuste conforme seus arquivos finais)
-SRCS = nbody.c nbody_gpu.c
+SRCS = nbody.c nbody_gpu.c ompc_comm.c
 OBJS = $(SRCS:.c=.o)
 TARGET = nbody
 
@@ -37,7 +38,7 @@ compare:
 	fi
 
 compile:
-	gcc -O2 -o bin2txt ../bin2txt.c
+	clang -O2 -o bin2txt ../bin2txt.c
 
 run-bin2txt: compile
 	./bin2txt

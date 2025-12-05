@@ -3,8 +3,8 @@
 #include <omp.h>
 
 void bodyForce_gpu(
-    Pos *global_pos, Vel *local_vel, int local_start, int local_n, int n) {
-    #pragma omp target teams distribute parallel for \
+    Pos *global_pos, Vel *local_vel, int local_start, int local_n, int n, int Device) {
+    #pragma omp target teams distribute parallel for device(Device)\
             is_device_ptr(global_pos, local_vel) \
             firstprivate(local_start, local_n, n) thread_limit(64)
     for (int i = 0; i < local_n; i++) {
@@ -31,8 +31,8 @@ void bodyForce_gpu(
     }
 }
 
-void integratePositions_gpu(Pos *local_pos, Vel *local_vel, int local_n) {
-    #pragma omp target teams distribute parallel for \
+void integratePositions_gpu(Pos *local_pos, Vel *local_vel, int local_n, int Device) {
+    #pragma omp target teams distribute parallel for device(Device)\
             is_device_ptr(local_pos, local_vel) \
             thread_limit(64)
     for (int i = 0; i < local_n; i++) {

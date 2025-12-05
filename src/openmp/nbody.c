@@ -147,8 +147,10 @@ int main(int argc, char **argv) {
         printf("%lf\n", omp_get_wtime() - start); // seconds
 
 #ifdef DEBUG
-    write_values_to_file(computed_pos, pos, sizeof(Pos), nBodies);
-    write_values_to_file(computed_vel, vel, sizeof(Vel), nBodies);
+    if (rank == 0) {
+        write_values_to_file(computed_pos, global_pos, sizeof(Pos), nBodies);
+        write_values_to_file(computed_vel, global_vel, sizeof(Vel), nBodies);
+    }
 #endif
 
     free(local_pos);

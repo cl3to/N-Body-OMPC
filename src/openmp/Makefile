@@ -1,9 +1,11 @@
 # Compiler and flags
+export MPICH_CC=clang
 MPICC = mpicc
 CFLAGS = -fopenmp -fopenmp-targets=nvptx64 \
-         -Xopenmp-target=nvptx64 -march=sm_80 \
          -O3 -Wall -std=c99
 LDFLAGS = -lm
+
+# -Xopenmp-target=nvptx64 -march=sm_80 \
 
 # Source files and target
 SRCS = nbody.c nbody_cpu.c nbody_gpu.c
@@ -37,7 +39,7 @@ compare:
 	fi
 
 compile:
-	gcc -O2 -o bin2txt ../bin2txt.c
+	clang -O2 -o bin2txt ../bin2txt.c
 
 run-bin2txt: compile
 	./bin2txt

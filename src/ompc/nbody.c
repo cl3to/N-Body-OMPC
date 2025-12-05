@@ -7,15 +7,21 @@
 #include "../include/files.h"
 
 // #define DEBUG
-#define BODYFORCE_USE_CPU 0
-#define INTEGRATEPOSITIONS_USE_CPU 0
 
-extern void bodyForce_cpu(
-    Pos *GlobalPos, Vel *local_vel, int local_start, int local_n, int n);
-extern void bodyForce_gpu(Pos *GlobalPos, Vel *local_vel, int local_start, int local_n, int n);
-extern void integratePositions_cpu(Pos *local_pos, Vel *local_vel, int local_n);
-extern void integratePositions_gpu(Pos *local_pos, Vel *local_vel, int local_n);
+extern void bodyForce_gpu(Pos *GlobalPos, Vel *local_vel, int local_start, int local_n, int n, int device);
+extern void integratePositions_gpu(Pos *local_pos, Vel *local_vel, int local_n, int device);
 
+extern void OMPC_NBody_Setup(const Pos *GlobalPos, const Vel *GlobalVel, const int *SendCounts,
+                             const int *Displs, Pos **DevGlobalPos, Pos **DevLocalPos,
+                             Vel **DevLocalVel, const int NumDevices, const int NBodies);
+
+extern void OMPC_Allgatherv(Pos *RootPtr, Pos **DevicePtrs, int *SendCounts,
+                     const int *Displs, Pos **DeviceStaging,
+                     const int NumDevices, const int NCount);
+
+extern void OMPC_Allgatherv_Ring(Pos *RootPtr, Pos **DevicePtrs, int *SendCounts,
+                          const int *Displs, Pos **DeviceStaging,
+                          const int NumDevices, const int NCount);
 
 int main(int argc, char **argv) {
     int nBodies = 2 << 12;
@@ -73,49 +79,18 @@ int main(int argc, char **argv) {
     }
 #endif
 
-    // Allocate local buffers on host to hold data for each device
-    Pos **HostLocalPos = malloc(sizeof(Pos *) * NumDevices);
-    Vel **HostLocalVel = malloc(sizeof(Vel *) * NumDevices);
-    for (int Device = 0; Device < NumDevices; ++Device) {
-        int ln = sendCounts[Device];
-        HostLocalPos[Device] = (Pos *)malloc(sizeof(Pos) * ln);
-        HostLocalVel[Device] = (Vel *)malloc(sizeof(Vel) * ln);
-    }
-
     // Persistent allocation on devices (using OpenMP runtime functions)
     // each device will have:
     //   - DevGlobalPos[Device] = complete copy of GlobalPos on the device
     //   - DevLocalPos[Device], DevLocalVel[Device] = local buffers on the device
-    void **DevGlobalPos = malloc(sizeof(void *) * NumDevices);
-    void **DevLocalPos = malloc(sizeof(void *) * NumDevices);
-    void **DevLocalVel = malloc(sizeof(void *) * NumDevices);
+    Pos **DevGlobalPos = malloc(sizeof(Pos *) * NumDevices);
+    Pos **DevLocalPos = malloc(sizeof(Pos *) * NumDevices);
+    Vel **DevLocalVel = malloc(sizeof(Vel *) * NumDevices);
 
-    // This loop allocates the device buffers and copies initial data
+    // This allocates the device buffers and copies initial data
     // The copy operations can be seen as the equivalent of MPI_Bcast and MPI_Scatterv
-    // We use #pragma omp parallel for to overlap the operations on all devices
-    // Each thread in this parallel region manages one device
-    #pragma omp parallel for num_threads(NumDevices)
-    for (int Device = 0; Device < NumDevices; ++Device) {
-        // Allocate DevGlobalPos[Device], DevLocalPos[Device], DevLocalVel[Device]
-        DevGlobalPos[Device] = omp_target_alloc(sizeof(Pos) * nBodies, Device);
-
-        // The local_n for this device
-        int LocalN = sendCounts[Device];
-
-        DevLocalPos[Device] = omp_target_alloc(sizeof(Pos) * LocalN, Device);
-        DevLocalVel[Device] = omp_target_alloc(sizeof(Vel) * LocalN, Device);
-
-        // initially copy GlobalPos to DevGlobalPos[Device]
-        // This is similar to MPI_Bcast
-        omp_target_memcpy(DevGlobalPos[Device], GlobalPos,
-                          sizeof(Pos) * nBodies, 0, 0, Device, HostId);
-
-        // Copy the initial slice of vel to DevLocalVel[Device]
-        // This is similar to MPI_Scatterv
-        omp_target_memcpy(DevLocalVel[Device],
-                          &GlobalVel[displs[Device]],
-                          sizeof(Vel) * LocalN, 0, 0, Device, HostId);
-    }
+    OMPC_NBody_Setup(GlobalPos, GlobalVel, sendCounts, displs, DevGlobalPos,
+                     DevLocalPos, DevLocalVel, NumDevices, nBodies);
 
     const int nIters = 10;
     start = omp_get_wtime();
@@ -127,50 +102,29 @@ int main(int argc, char **argv) {
             int LocalN = sendCounts[Device];
             int LocalStart = displs[Device];
 
-            // Set the device for this thread
-            omp_set_default_device(Device);
-
             // Launch bodyForce
             bodyForce_gpu((Pos *)DevGlobalPos[Device],
                           (Vel *)DevLocalVel[Device],
                           LocalStart,
                           LocalN,
-                          nBodies);
+                          nBodies,
+                          Device);
 
             // Launch integratePositions
             integratePositions_gpu((Pos *)DevLocalPos[Device],
                                    (Vel *)DevLocalVel[Device],
-                                   LocalN);
+                                   LocalN,
+                                   Device);
         }
 
-        // After computation, gather results back to host
+        // After computation, gather results across devices
         // This is similar to MPI_Allgatherv
-        #pragma omp parallel for num_threads(NumDevices)
-        for (int Device = 0; Device < NumDevices; ++Device) {
-            int LocalN = sendCounts[Device];
-
-            // Copy back the updated local positions from device to host
-            omp_target_memcpy(HostLocalPos[Device],
-                              DevLocalPos[Device],
-                              sizeof(Pos) * LocalN, 0, 0, HostId, Device);
-        }
-
-        // Now assemble GlobalPos from HostLocalPos
-        for (int Device = 0; Device < NumDevices; ++Device) {
-            int LocalN = sendCounts[Device];
-            int LocalStart = displs[Device];
-            for (int i = 0; i < LocalN; ++i) {
-                GlobalPos[LocalStart + i] = HostLocalPos[Device][i];
-            }
-        }
-
-        // Copy updated GlobalPos back to all devices
-        #pragma omp parallel for num_threads(NumDevices)
-        for (int Device = 0; Device < NumDevices; ++Device) {
-            omp_target_memcpy(DevGlobalPos[Device], GlobalPos,
-                              sizeof(Pos) * nBodies, 0, 0, Device, HostId);
-        }
+        OMPC_Allgatherv_Ring(GlobalPos, DevGlobalPos, sendCounts, displs,
+                             DevLocalPos, NumDevices, nBodies);
     }
+
+    // After computation, gather results back to host
+    omp_target_memcpy(GlobalPos, DevGlobalPos[0], sizeof(Pos) * nBodies, 0, 0, HostId, 0);
 
     printf("%lf\n", omp_get_wtime() - start); // seconds
 
@@ -184,15 +138,11 @@ int main(int argc, char **argv) {
         omp_target_free(DevGlobalPos[Device], Device);
         omp_target_free(DevLocalPos[Device], Device);
         omp_target_free(DevLocalVel[Device], Device);
-        free(HostLocalPos[Device]);
-        free(HostLocalVel[Device]);
     }
 
     free(DevGlobalPos);
     free(DevLocalPos);
     free(DevLocalVel);
-    free(HostLocalPos);
-    free(HostLocalVel);
     free(GlobalPos);
     free(GlobalVel);
     free(sendCounts);
