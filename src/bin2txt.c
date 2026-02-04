@@ -30,7 +30,7 @@ int main(int argc, char **argv)
 		Pos temp;
 		while (fread(&temp, sizeof(Pos), 1, binFile))
 		{ // Read struct from binary
-			fprintf(txtFile, "%f %f %f\n", temp.x, temp.y, temp.z);
+			fprintf(txtFile, "%.9g %.9g %.9g\n", temp.x, temp.y, temp.z);
 		}
 
 		fclose(binFile);
