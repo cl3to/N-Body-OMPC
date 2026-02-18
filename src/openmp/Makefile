@@ -1,11 +1,19 @@
 # Compiler and flags
-export MPICH_CC=clang
-MPICC = mpicc
-CFLAGS = -fopenmp -fopenmp-targets=nvptx64 \
-         -O3 -Wall -std=c99
-LDFLAGS = -lm
+MPI_CC ?= clang
+MPICC ?= OMPI_CC=$(MPI_CC) mpicc
+OMP_TARGET ?= nvptx64
+GPU_ARCH ?= sm_80
 
-# -Xopenmp-target=nvptx64 -march=sm_80 \
+BASE_CFLAGS = -fopenmp -O3 -Wall -std=c99
+OFFLOAD_CFLAGS_CLANG = -fopenmp-targets=$(OMP_TARGET) \
+	-Xopenmp-target=$(OMP_TARGET) -march=$(GPU_ARCH)
+LDFLAGS = -lm
+PYTHON ?= python3
+RTOL ?= 1e-3
+ATOL ?= 1e-5
+MAX_REPORT ?= 10
+
+CFLAGS = $(BASE_CFLAGS) $(OFFLOAD_CFLAGS_CLANG)
 
 # Source files and target
 SRCS = nbody.c nbody_cpu.c nbody_gpu.c
@@ -28,22 +36,26 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 
 compare:
-	@DIFF_OUTPUT=$$( \
-		diff ../debug/computed_pos_12 ../debug/solution_pos_12; \
-		diff ../debug/computed_vel_12 ../debug/solution_vel_12); \
-	if [ -z "$$DIFF_OUTPUT" ]; then \
-		echo "All files match. No differences found."; \
-	else \
-		echo "The files differ. Note: cuda and cpu functions may show different floating precision"; \
-		echo "$$DIFF_OUTPUT"; \
-	fi
+	@$(PYTHON) ../compare.py \
+		--computed ../debug/computed_pos_12 \
+		--solution ../debug/solution_pos_12 \
+		--kind pos \
+		--rtol $(RTOL) --atol $(ATOL) --max-report $(MAX_REPORT)
+	@$(PYTHON) ../compare.py \
+		--computed ../debug/computed_vel_12 \
+		--solution ../debug/solution_vel_12 \
+		--kind vel \
+		--rtol $(RTOL) --atol $(ATOL) --max-report $(MAX_REPORT)
 
 compile:
-	clang -O2 -o bin2txt ../bin2txt.c
+	gcc -O2 -o bin2txt ../bin2txt.c
 
 run-bin2txt: compile
 	./bin2txt
 
 compare-txt: run-bin2txt
+	@$(MAKE) compare
+
+diff-txt: run-bin2txt
 	sdiff ../debug/computed_pos_12.txt ../debug/solution_pos_12.txt || true; \
 	sdiff ../debug/computed_vel_12.txt ../debug/solution_vel_12.txt || true;

@@ -2,11 +2,12 @@
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "../include/body.h"
 #include "../include/files.h"
 
-// #define DEBUG
+#define DEBUG
 #define BODYFORCE_USE_CPU 0
 #define INTEGRATEPOSITIONS_USE_CPU 0
 
@@ -15,6 +16,21 @@ extern void bodyForce_cpu(
 extern void bodyForce_gpu(Pos *global_pos, Vel *local_vel, int local_start, int local_n, int n);
 extern void integratePositions_cpu(Pos *local_pos, Vel *local_vel, int local_n);
 extern void integratePositions_gpu(Pos *local_pos, Vel *local_vel, int local_n);
+
+static void require_offload(int rank) {
+    int offload_ok = 0;
+#pragma omp target map(tofrom : offload_ok)
+    { offload_ok = !omp_is_initial_device(); }
+    if (!offload_ok) {
+        if (rank == 0) {
+            fprintf(stderr,
+                    "ERROR: OpenMP target offload not active. "
+                    "Ensure libomptarget CUDA plugin is available and rebuild "
+                    "with the correct GPU_ARCH (e.g. make GPU_ARCH=sm_75).\n");
+        }
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+}
 
 void bodyForce_mpi(
     Pos *global_pos, Vel *local_vel, int local_start, int local_n, int n) {
@@ -62,6 +78,7 @@ int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
+    require_offload(rank);
 
     int base = nBodies / size;
     int rem = nBodies % size;
@@ -114,6 +131,10 @@ int main(int argc, char **argv) {
     if (rank != 0)
         global_pos = malloc(sizeof(Pos) * nBodies);
 
+    if (rank == 0) {
+        start = omp_get_wtime();
+    }
+    
     MPI_Scatterv(global_vel,
                  sendCounts,
                  displs,
@@ -124,12 +145,10 @@ int main(int argc, char **argv) {
                  0,
                  MPI_COMM_WORLD);
     MPI_Bcast(global_pos, nBodies, MPI_Pos, 0, MPI_COMM_WORLD);
+    memcpy(local_pos, global_pos + local_start, sizeof(Pos) * local_n);
 
     const int nIters = 10;
 
-    if (rank == 0) {
-        start = omp_get_wtime();
-    }
 
     for (int iter = 0; iter < nIters; iter++) {
         bodyForce_mpi(global_pos, local_vel, local_start, local_n, nBodies);
@@ -143,8 +162,19 @@ int main(int argc, char **argv) {
                        MPI_Pos,
                        MPI_COMM_WORLD);
     }
+    MPI_Gatherv(local_vel,
+                local_n,
+                MPI_Vel,
+                (rank == 0) ? global_vel : NULL,
+                sendCounts,
+                displs,
+                MPI_Vel,
+                0,
+                MPI_COMM_WORLD);
+
     if (rank == 0)
         printf("%lf\n", omp_get_wtime() - start); // seconds
+
 
 #ifdef DEBUG
     if (rank == 0) {
