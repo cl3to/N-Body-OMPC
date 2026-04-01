@@ -1,11 +1,11 @@
 # Compiler and flags
 MPI_CC ?= clang
-MPICC ?= OMPI_CC=$(MPI_CC) mpicc
+MPICC ?= MPICH_CC=$(MPI_CC) mpicc
 OMP_TARGET ?= nvptx64
 GPU_ARCH ?= sm_80
 
 BASE_CFLAGS = -fopenmp -O3 -Wall -std=c99
-OFFLOAD_CFLAGS_CLANG = -fopenmp-targets=$(OMP_TARGET) \
+OFFLOAD_CFLAGS_CLANG = -fopenmp-targets=$(OMP_TARGET)
 	-Xopenmp-target=$(OMP_TARGET) -march=$(GPU_ARCH)
 LDFLAGS = -lm
 PYTHON ?= python3
@@ -48,7 +48,7 @@ compare:
 		--rtol $(RTOL) --atol $(ATOL) --max-report $(MAX_REPORT)
 
 compile:
-	gcc -O2 -o bin2txt ../bin2txt.c
+	clang -O2 -o bin2txt ../bin2txt.c
 
 run-bin2txt: compile
 	./bin2txt

@@ -23,6 +23,11 @@ extern void OMPC_Allgatherv_Ring(Pos *RootPtr, Pos **DevicePtrs, int *SendCounts
                           const int *Displs, Pos **DeviceStaging,
                           const int NumDevices, const int NCount);
 
+extern void OMPC_Gatherv(Vel *RootPtr, Vel **DevicePtrs, int *SendCounts,
+                         const int *Displs, Vel **DeviceStaging,
+                         const int NumDevices, const int NCount);
+
+                          
 int main(int argc, char **argv) {
     int nBodies = 2 << 12;
     double start;
@@ -125,6 +130,9 @@ int main(int argc, char **argv) {
 
     // After computation, gather results back to host
     omp_target_memcpy(GlobalPos, DevGlobalPos[0], sizeof(Pos) * nBodies, 0, 0, HostId, 0);
+
+    OMPC_Gatherv(GlobalVel, DevLocalVel,  sendCounts, displs,
+                 DevLocalVel, NumDevices, nBodies);
 
     printf("%lf\n", omp_get_wtime() - start); // seconds
 

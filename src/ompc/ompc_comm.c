@@ -29,6 +29,11 @@ void OMPC_NBody_Setup(const Pos *GlobalPos, const Vel *GlobalVel, const int *Sen
         omp_target_memcpy(DevGlobalPos[Device], GlobalPos,
                           sizeof(Pos) * NBodies, 0, 0, Device, HostId);
 
+        // Copy the initial values ​​to LocalPos
+        const Pos *SrcSlicePos = (DevGlobalPos[Device] + Displs[Device]);
+        omp_target_memcpy(DevLocalPos[Device], SrcSlicePos,
+                          sizeof(Pos) * LocalN, 0, 0, Device, Device);
+
         const Vel *SrcSlice = (GlobalVel + Displs[Device]);
 
         // Copy the initial slice of vel to DevLocalVel[Device]
@@ -102,4 +107,21 @@ void OMPC_Allgatherv_Ring(Pos *RootPtr, Pos **DevicePtrs, int *SendCounts,
         }
     }
 
+}
+
+void OMPC_Gatherv(Vel *RootPtr, Vel **DevicePtrs, int *SendCounts,
+                     const int *Displs, Vel **DeviceStaging,
+                     const int NumDevices, const int NCount) {
+    const int HostId = omp_get_initial_device();
+
+    #pragma omp parallel for num_threads(NumDevices)
+    for (int Device = 0; Device < NumDevices; ++Device) {
+        int LocalN = SendCounts[Device];
+        int LocalStart = Displs[Device];
+
+        // Copy back the updated LocalVel from devices to host
+        omp_target_memcpy(&RootPtr[LocalStart],
+                          DeviceStaging[Device],
+                          sizeof(Vel) * LocalN, 0, 0, HostId, Device);
+    }
 }

@@ -7,7 +7,7 @@
 #include "../include/body.h"
 #include "../include/files.h"
 
-#define DEBUG
+// #define DEBUG
 #define BODYFORCE_USE_CPU 0
 #define INTEGRATEPOSITIONS_USE_CPU 0
 

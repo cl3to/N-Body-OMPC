@@ -5,6 +5,10 @@ CFLAGS = -fopenmp -fopenmp-targets=nvptx64 \
 #          -Xopenmp-target=nvptx64 -march=sm_86
 # x86_64-pc-linux-gnu
 LDFLAGS = -lm
+PYTHON ?= python3
+RTOL ?= 1e-3
+ATOL ?= 1e-5
+MAX_REPORT ?= 10
 
 # Source files and target (ajuste conforme seus arquivos finais)
 SRCS = nbody.c nbody_gpu.c ompc_comm.c
@@ -27,15 +31,17 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 
 compare:
-	@DIFF_OUTPUT=$$( \
-		diff ../debug/computed_pos_12 ../debug/solution_pos_12; \
-		diff ../debug/computed_vel_12 ../debug/solution_vel_12); \
-	if [ -z "$$DIFF_OUTPUT" ]; then \
-		echo "All files match. No differences found."; \
-	else \
-		echo "The files differ. Note: cuda and cpu functions may show different floating precision"; \
-		echo "$$DIFF_OUTPUT"; \
-	fi
+	@$(PYTHON) ../compare.py \
+		--computed ../debug/computed_pos_12 \
+		--solution ../debug/solution_pos_12 \
+		--kind pos \
+		--rtol $(RTOL) --atol $(ATOL) --max-report $(MAX_REPORT)
+	@$(PYTHON) ../compare.py \
+		--computed ../debug/computed_vel_12 \
+		--solution ../debug/solution_vel_12 \
+		--kind vel \
+		--rtol $(RTOL) --atol $(ATOL) --max-report $(MAX_REPORT)
+
 
 compile:
 	clang -O2 -o bin2txt ../bin2txt.c
