@@ -1,14 +1,18 @@
 STARPU_VERSION=1.4
 
-CC = mpicc
+MPI_CC ?= clang
+MPICC ?= MPICH_CC=$(MPI_CC) mpicc
+
+OMP_TARGET ?= nvptx64
+GPU_ARCH ?= sm_80
 
 CPPFLAGS += $(shell pkg-config --cflags starpu-$(STARPU_VERSION) --cflags starpumpi-1.4)
 LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION) --libs starpumpi-1.4)
 
-CFLAGS += -O3 -Wall -Wextra -lm -fopenmp
+CFLAGS += -fopenmp -O3 -Wall -Wextra -std=c99
+CFLAGS += -fopenmp-targets=$(OMP_TARGET) -Xopenmp-target=$(OMP_TARGET) -march=$(GPU_ARCH)
 
-# to avoid having to use LD_LIBRARY_PATH
-LDLIBS += -fopenmp -lm -Wl,-rpath -Wl,$(shell pkg-config --variable=libdir starpu-$(STARPU_VERSION))
+LDLIBS += -lm -Wl,-rpath -Wl,$(shell pkg-config --variable=libdir starpu-$(STARPU_VERSION))
 
 all: $(PROGS)
 

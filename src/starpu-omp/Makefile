@@ -2,7 +2,14 @@ PROGS=nbody
 
 include ./starpu.mk
 
-nbody: nbody.o nbody_cpu.o nbody_gpu.o
+SRCS = nbody.c nbody_cpu.c nbody_gpu.c
+OBJS = $(SRCS:.c=.o)
+
+nbody: $(OBJS)
+	$(MPICC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
+%.o: %.c
+	$(MPICC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 compare:
 	@DIFF_OUTPUT=$$( \
