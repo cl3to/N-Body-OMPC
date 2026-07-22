@@ -1,18 +1,15 @@
 STARPU_VERSION=1.4
 
-MPI_CC ?= clang
-MPICC ?= MPICH_CC=$(MPI_CC) mpicc
+# OpenMP target offload compiler (amdclang for ROCm, clang for NVIDIA)
+OMP_CC ?= amdclang
 
-OMP_TARGET ?= nvptx64
-GPU_ARCH ?= sm_80
+# Override OMP_TARGET for NVIDIA GPUs: nvptx64-nvidia-cuda
+OMP_TARGET ?= amdgcn-amd-amdhsa
+GPU_ARCH ?= gfx90a
 
-CPPFLAGS += $(shell pkg-config --cflags starpu-$(STARPU_VERSION) --cflags starpumpi-1.4)
-LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION) --libs starpumpi-1.4)
-
-CFLAGS += -fopenmp -O3 -Wall -Wextra -std=c99
+CFLAGS += -fopenmp -O3 -Wall -Wextra
 CFLAGS += -fopenmp-targets=$(OMP_TARGET) -Xopenmp-target=$(OMP_TARGET) -march=$(GPU_ARCH)
-
-LDLIBS += -lm -Wl,-rpath -Wl,$(shell pkg-config --variable=libdir starpu-$(STARPU_VERSION))
+LDLIBS += $(addprefix -L, $(subst :, ,$(LD_LIBRARY_PATH))) -lstarpu-$(STARPU_VERSION) -lstarpumpi-1.4 -lm
 
 all: $(PROGS)
 

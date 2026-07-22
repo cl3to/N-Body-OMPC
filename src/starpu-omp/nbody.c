@@ -24,6 +24,7 @@
  */
 #include <starpu.h>
 #include <starpu_mpi.h>
+#include <omp.h>
 
 #include "../include/body.h"
 #include "../include/files.h"
@@ -42,7 +43,7 @@ static struct starpu_perfmodel integratepositions_perfmodel = {
     .type = STARPU_HISTORY_BASED, .symbol = "integratepositions"};
 
 static struct starpu_codelet bodyForce_cl = {
-    .cpu_funcs = {bodyForce_cpu, bodyForce_gpu},
+    .cpu_funcs = {bodyForce_gpu, bodyForce_cpu},
     .where = STARPU_CPU,
     .max_parallelism = INT_MAX,
     .nbuffers = 2,
@@ -51,7 +52,7 @@ static struct starpu_codelet bodyForce_cl = {
 };
 
 static struct starpu_codelet integratePositions_cl = {
-    .cpu_funcs = {integratePositions_cpu, integratePositions_gpu},
+    .cpu_funcs = {integratePositions_gpu, integratePositions_cpu},
     .where = STARPU_CPU,
     .max_parallelism = INT_MAX,
     .nbuffers = 2,
@@ -153,6 +154,7 @@ int main(int argc, char **argv) {
 
     for (int i = 0; i < nIters; i++) {
         for (int j = 0; j < nPartitions; j++) {
+            int exec_rank = j % size;
             ret = starpu_mpi_task_insert(MPI_COMM_WORLD,
                                          &bodyForce_cl,
                                          STARPU_R,
@@ -160,11 +162,15 @@ int main(int argc, char **argv) {
                                          STARPU_RW,
                                          vel_handles[j],
                                          STARPU_EXECUTE_ON_NODE,
-                                         j % size,
+                                         exec_rank,
+                                         STARPU_VALUE,
+                                         &exec_rank,
+                                         sizeof(exec_rank),
                                          0);
         }
 
         for (int j = 0; j < nPartitions; j++) {
+            int exec_rank = j % size;
             ret = starpu_mpi_task_insert(MPI_COMM_WORLD,
                                          &integratePositions_cl,
                                          STARPU_RW,
@@ -172,7 +178,10 @@ int main(int argc, char **argv) {
                                          STARPU_R,
                                          vel_handles[j],
                                          STARPU_EXECUTE_ON_NODE,
-                                         j % size,
+                                         exec_rank,
+                                         STARPU_VALUE,
+                                         &exec_rank,
+                                         sizeof(exec_rank),
                                          0);
         }
     }
