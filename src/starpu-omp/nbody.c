@@ -31,6 +31,16 @@
 
 // #define DEBUG
 
+// More than one tile per MPI rank gives StarPU enough ready work to schedule
+// and pipeline while keeping the total amount of body-force work unchanged.
+#ifndef STARPU_PARTITIONS_PER_RANK
+#define STARPU_PARTITIONS_PER_RANK 4
+#endif
+
+#if STARPU_PARTITIONS_PER_RANK < 1
+#error "STARPU_PARTITIONS_PER_RANK must be at least 1"
+#endif
+
 extern void bodyForce_cpu(void *buffers[], void *_args);
 extern void bodyForce_gpu(void *buffers[], void *_args);
 extern void integratePositions_cpu(void *buffers[], void *_args);
@@ -43,7 +53,9 @@ static struct starpu_perfmodel integratepositions_perfmodel = {
     .type = STARPU_HISTORY_BASED, .symbol = "integratepositions"};
 
 static struct starpu_codelet bodyForce_cl = {
-    .cpu_funcs = {bodyForce_gpu, bodyForce_cpu},
+    // StarPU's CPU worker invokes the OpenMP target callback. StarPU itself
+    // does not schedule a CUDA/HIP worker for this implementation.
+    .cpu_funcs = {bodyForce_gpu},
     .where = STARPU_CPU,
     .max_parallelism = INT_MAX,
     .nbuffers = 2,
@@ -52,7 +64,7 @@ static struct starpu_codelet bodyForce_cl = {
 };
 
 static struct starpu_codelet integratePositions_cl = {
-    .cpu_funcs = {integratePositions_gpu, integratePositions_cpu},
+    .cpu_funcs = {integratePositions_gpu},
     .where = STARPU_CPU,
     .max_parallelism = INT_MAX,
     .nbuffers = 2,
@@ -88,13 +100,24 @@ int main(int argc, char **argv) {
     struct starpu_conf conf;
     starpu_conf_init(&conf);
     conf.sched_policy_name = "dmda";
-    // conf.reserve_ncpus = 1;
+    conf.ncpus = 1;
 
     starpu_mpi_init_conf(&argc, &argv, 1, MPI_COMM_WORLD, &conf);
     starpu_mpi_comm_rank(MPI_COMM_WORLD, &rank);
     starpu_mpi_comm_size(MPI_COMM_WORLD, &size);
 
-    nPartitions = size * starpu_worker_get_count();
+    // Use several tiles per rank. The tiles are assigned round-robin below,
+    // so every rank still processes N/size bodies in total.
+    nPartitions = size * STARPU_PARTITIONS_PER_RANK;
+
+    int num_devices = omp_get_num_devices();
+    if (num_devices == 0) {
+        fprintf(stderr,
+                "MPI rank %d can see no OpenMP target devices; a GPU is "
+                "required.\n",
+                rank);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
     if (rank == 0) {
         starpu_malloc((void **)&pos, sizeof(Pos) * nBodies);
@@ -150,6 +173,7 @@ int main(int argc, char **argv) {
     }
 
     const int nIters = 10;
+    MPI_Barrier(MPI_COMM_WORLD);
     double start = starpu_timing_now();
 
     for (int i = 0; i < nIters; i++) {
@@ -167,6 +191,14 @@ int main(int argc, char **argv) {
                                          &exec_rank,
                                          sizeof(exec_rank),
                                          0);
+            if (ret != 0) {
+                fprintf(stderr,
+                        "MPI rank %d: StarPU body-force submission failed "
+                        "(%d)\n",
+                        rank,
+                        ret);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
         }
 
         for (int j = 0; j < nPartitions; j++) {
@@ -183,6 +215,14 @@ int main(int argc, char **argv) {
                                          &exec_rank,
                                          sizeof(exec_rank),
                                          0);
+            if (ret != 0) {
+                fprintf(stderr,
+                        "MPI rank %d: StarPU integration submission failed "
+                        "(%d)\n",
+                        rank,
+                        ret);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
         }
     }
     starpu_task_wait_for_all();
@@ -197,8 +237,8 @@ int main(int argc, char **argv) {
         starpu_data_acquire(vel_handle, STARPU_R);
         pos = starpu_data_get_local_ptr(pos_handle);
         vel = starpu_data_get_local_ptr(vel_handle);
-        double timing = starpu_timing_now() - start; // in microsseconds
-        printf("%lf\n", timing);
+        double timing = (starpu_timing_now() - start) / 1.0e6;
+        printf("%lf\n", timing); // seconds, matching src/openmp
 #ifdef DEBUG
         write_values_to_file(computed_pos, pos, sizeof(Pos), nBodies);
         write_values_to_file(computed_vel, vel, sizeof(Vel), nBodies);

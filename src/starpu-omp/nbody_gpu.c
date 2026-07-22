@@ -5,9 +5,11 @@
 #include "../include/body.h"
 
 void bodyForce_gpu(void *buffers[], void *_args) {
-    int exec_rank = _args ? *(int *)_args : 0;
+    int mpi_rank = 0;
+    if (_args)
+        starpu_codelet_unpack_args(_args, &mpi_rank);
     int num_devices = omp_get_num_devices();
-    int dev_id = num_devices > 0 ? (exec_rank % num_devices) : 0;
+    int dev_id = num_devices > 0 ? (mpi_rank % num_devices) : 0;
 
     unsigned int nPos = STARPU_VECTOR_GET_NX(buffers[0]);
     unsigned int nVel = STARPU_VECTOR_GET_NX(buffers[1]);
@@ -45,9 +47,11 @@ void bodyForce_gpu(void *buffers[], void *_args) {
 }
 
 void integratePositions_gpu(void *buffers[], void *_args) {
-    int exec_rank = _args ? *(int *)_args : 0;
+    int mpi_rank = 0;
+    if (_args)
+        starpu_codelet_unpack_args(_args, &mpi_rank);
     int num_devices = omp_get_num_devices();
-    int dev_id = num_devices > 0 ? (exec_rank % num_devices) : 0;
+    int dev_id = num_devices > 0 ? (mpi_rank % num_devices) : 0;
 
     unsigned int nVel = STARPU_VECTOR_GET_NX(buffers[1]);
 

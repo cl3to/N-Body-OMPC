@@ -16,10 +16,11 @@ extern void bodyForce_cpu(
 extern void bodyForce_gpu(Pos *global_pos, Vel *local_vel, int local_start, int local_n, int n);
 extern void integratePositions_cpu(Pos *local_pos, Vel *local_vel, int local_n);
 extern void integratePositions_gpu(Pos *local_pos, Vel *local_vel, int local_n);
+extern void set_gpu_device(int device);
 
-static void require_offload(int rank) {
+static void require_offload(int rank, int device) {
     int offload_ok = 0;
-#pragma omp target map(tofrom : offload_ok)
+#pragma omp target device(device) map(tofrom : offload_ok)
     { offload_ok = !omp_is_initial_device(); }
     if (!offload_ok) {
         if (rank == 0) {
@@ -78,7 +79,20 @@ int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
-    require_offload(rank);
+
+    int num_devices = omp_get_num_devices();
+    if (num_devices == 0) {
+        fprintf(stderr,
+                "MPI rank %d can see no OpenMP target devices; a GPU is "
+                "required.\n",
+                rank);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    int gpu_device = rank % num_devices;
+    set_gpu_device(gpu_device);
+    omp_set_default_device(gpu_device);
+    require_offload(rank, gpu_device);
 
     int base = nBodies / size;
     int rem = nBodies % size;
@@ -131,6 +145,7 @@ int main(int argc, char **argv) {
     if (rank != 0)
         global_pos = malloc(sizeof(Pos) * nBodies);
 
+    MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
         start = omp_get_wtime();
     }
