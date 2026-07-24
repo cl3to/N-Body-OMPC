@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
     OMPC_Gatherv(GlobalVel, DevLocalVel,  sendCounts, displs,
                  DevLocalVel, NumDevices, nBodies);
 
-    printf("%lf\n", omp_get_wtime() - start); // seconds
+    printf("runtime: %lf\n", omp_get_wtime() - start); // seconds
 
 #ifdef DEBUG
     write_values_to_file(computed_pos, GlobalPos, sizeof(Pos), nBodies);

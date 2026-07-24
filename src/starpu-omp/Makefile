@@ -23,7 +23,7 @@ compare:
 	fi
 
 compile:
-	gcc -O2 -o bin2txt ../bin2txt.c
+	clang -O2 -o bin2txt ../bin2txt.c
 
 run-bin2txt: compile
 	./bin2txt

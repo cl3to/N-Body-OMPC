@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
                 MPI_COMM_WORLD);
 
     if (rank == 0)
-        printf("%lf\n", omp_get_wtime() - start); // seconds
+        printf("runtime: %lf\n", omp_get_wtime() - start); // seconds
 
 
 #ifdef DEBUG

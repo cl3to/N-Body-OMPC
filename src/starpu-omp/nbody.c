@@ -34,7 +34,7 @@
 // More than one tile per MPI rank gives StarPU enough ready work to schedule
 // and pipeline while keeping the total amount of body-force work unchanged.
 #ifndef STARPU_PARTITIONS_PER_RANK
-#define STARPU_PARTITIONS_PER_RANK 4
+#define STARPU_PARTITIONS_PER_RANK 1
 #endif
 
 #if STARPU_PARTITIONS_PER_RANK < 1
@@ -109,6 +109,14 @@ int main(int argc, char **argv) {
     // Use several tiles per rank. The tiles are assigned round-robin below,
     // so every rank still processes N/size bodies in total.
     nPartitions = size * STARPU_PARTITIONS_PER_RANK;
+    if (nPartitions > nBodies) {
+        fprintf(stderr,
+                "MPI rank %d: %d partitions cannot be created for %d bodies\n",
+                rank,
+                nPartitions,
+                nBodies);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
     int num_devices = omp_get_num_devices();
     if (num_devices == 0) {
@@ -179,6 +187,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < nIters; i++) {
         for (int j = 0; j < nPartitions; j++) {
             int exec_rank = j % size;
+            int base = nBodies / nPartitions;
+            int remainder = nBodies % nPartitions;
+            int global_start = j * base + (j < remainder ? j : remainder);
             ret = starpu_mpi_task_insert(MPI_COMM_WORLD,
                                          &bodyForce_cl,
                                          STARPU_R,
@@ -190,6 +201,9 @@ int main(int argc, char **argv) {
                                          STARPU_VALUE,
                                          &exec_rank,
                                          sizeof(exec_rank),
+                                         STARPU_VALUE,
+                                         &global_start,
+                                         sizeof(global_start),
                                          0);
             if (ret != 0) {
                 fprintf(stderr,
@@ -224,7 +238,11 @@ int main(int argc, char **argv) {
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
         }
+
     }
+    
+    // Do not submit the next iteration until all child position updates
+    // from this iteration are visible to the parent position handle.
     starpu_task_wait_for_all();
 
     starpu_data_unpartition_submit(vel_handle, nPartitions, vel_handles, -1);
@@ -238,7 +256,7 @@ int main(int argc, char **argv) {
         pos = starpu_data_get_local_ptr(pos_handle);
         vel = starpu_data_get_local_ptr(vel_handle);
         double timing = (starpu_timing_now() - start) / 1.0e6;
-        printf("%lf\n", timing); // seconds, matching src/openmp
+        printf("runtime: %lf\n", timing); // seconds, matching src/openmp
 #ifdef DEBUG
         write_values_to_file(computed_pos, pos, sizeof(Pos), nBodies);
         write_values_to_file(computed_vel, vel, sizeof(Vel), nBodies);

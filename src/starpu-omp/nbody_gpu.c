@@ -6,8 +6,9 @@
 
 void bodyForce_gpu(void *buffers[], void *_args) {
     int mpi_rank = 0;
+    int global_start = 0;
     if (_args)
-        starpu_codelet_unpack_args(_args, &mpi_rank);
+        starpu_codelet_unpack_args(_args, &mpi_rank, &global_start);
     int num_devices = omp_get_num_devices();
     int dev_id = num_devices > 0 ? (mpi_rank % num_devices) : 0;
 
@@ -17,8 +18,6 @@ void bodyForce_gpu(void *buffers[], void *_args) {
     Pos *p = (Pos *)STARPU_VECTOR_GET_PTR(buffers[0]);
     Vel *v = (Vel *)STARPU_VECTOR_GET_PTR(buffers[1]);
 
-    unsigned int offset = STARPU_VECTOR_GET_OFFSET(buffers[1]) / sizeof(Vel);
-
 #pragma omp target teams distribute parallel for \
     map(to : p[0 : nPos]) map(tofrom : v[0 : nVel]) thread_limit(64) \
     device(dev_id)
@@ -26,7 +25,7 @@ void bodyForce_gpu(void *buffers[], void *_args) {
         float Fx = 0.0f;
         float Fy = 0.0f;
         float Fz = 0.0f;
-        unsigned global_i = offset + i;
+        unsigned global_i = global_start + i;
         for (unsigned j = 0; j < nPos; j++) {
             float dx = p[j].x - p[global_i].x;
             float dy = p[j].y - p[global_i].y;
