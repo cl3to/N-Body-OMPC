@@ -8,6 +8,8 @@ LDLIBS += $(shell pkg-config --libs starpu-$(STARPU_VERSION) --libs starpumpi-1.
 
 CFLAGS += -O3 -Wall -Wextra -lm -fopenmp
 HIPCCFLAGS = $(shell pkg-config --cflags starpu-$(STARPU_VERSION) --cflags starpumpi-1.4) -std=c++11 -fPIC
+PARTITIONS_PER_RANK ?= 1
+CFLAGS += -DSTARPU_PARTITIONS_PER_RANK=$(PARTITIONS_PER_RANK)
 
 # HIP runtime root, used to locate libamdhip64.so. May be overridden by the
 # environment (e.g. /opt/rocm).

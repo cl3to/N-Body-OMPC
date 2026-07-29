@@ -31,6 +31,14 @@
 
 // #define DEBUG
 
+#ifndef STARPU_PARTITIONS_PER_RANK
+#define STARPU_PARTITIONS_PER_RANK 1
+#endif
+
+#if STARPU_PARTITIONS_PER_RANK < 1
+#error "STARPU_PARTITIONS_PER_RANK must be at least 1"
+#endif
+
 extern void bodyForce_cpu(void *buffers[], void *_args);
 extern void bodyForce_hip(void *buffers[], void *_args);
 extern void integratePositions_cpu(void *buffers[], void *_args);
@@ -47,6 +55,7 @@ static struct starpu_codelet bodyForce_cl = {
 
 #ifdef STARPU_USE_HIP
     .hip_funcs = {bodyForce_hip},
+    .hip_flags = {STARPU_HIP_ASYNC},
 #endif
     .where = STARPU_HIP,
     .max_parallelism = INT_MAX,
@@ -60,6 +69,7 @@ static struct starpu_codelet integratePositions_cl = {
 
 #ifdef STARPU_USE_HIP
     .hip_funcs = {integratePositions_hip},
+    .hip_flags = {STARPU_HIP_ASYNC},
 #endif
     .where = STARPU_HIP,
     .max_parallelism = INT_MAX,
@@ -95,18 +105,30 @@ int main(int argc, char **argv) {
     setbuf(stdout, NULL);
     struct starpu_conf conf;
     starpu_conf_init(&conf);
-    conf.sched_policy_name = "dmda";
-    // conf.reserve_ncpus = 1;
+    conf.sched_policy_name = "dmdar";
+    conf.ncpus = 1;
 
     starpu_mpi_init_conf(&argc, &argv, 1, MPI_COMM_WORLD, &conf);
     starpu_mpi_comm_rank(MPI_COMM_WORLD, &rank);
     starpu_mpi_comm_size(MPI_COMM_WORLD, &size);
 
-    nPartitions = size * starpu_worker_get_count();
+    nPartitions = size * STARPU_PARTITIONS_PER_RANK;
+    if (nPartitions > nBodies) {
+        fprintf(stderr,
+                "MPI rank %d: %d partitions cannot be created for %d bodies\n",
+                rank,
+                nPartitions,
+                nBodies);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
     if (rank == 0) {
-        starpu_malloc((void **)&pos, sizeof(Pos) * nBodies);
-        starpu_malloc((void **)&vel, sizeof(Vel) * nBodies);
+        starpu_malloc_flags((void **)&pos,
+                            sizeof(Pos) * nBodies,
+                            STARPU_MALLOC_PINNED);
+        starpu_malloc_flags((void **)&vel,
+                            sizeof(Vel) * nBodies,
+                            STARPU_MALLOC_PINNED);
 
 #ifdef DEBUG
         read_values_from_file(initialized_pos, pos, sizeof(Pos), nBodies);
@@ -197,8 +219,8 @@ int main(int argc, char **argv) {
         starpu_data_acquire(vel_handle, STARPU_R);
         pos = starpu_data_get_local_ptr(pos_handle);
         vel = starpu_data_get_local_ptr(vel_handle);
-        double timing = starpu_timing_now() - start; // in microsseconds
-        printf("%lf\n", timing);
+        double timing = (starpu_timing_now() - start) / 1.0e6;
+        printf("runtime: %lf\n", timing); // seconds, matching src/openmp
 #ifdef DEBUG
         write_values_to_file(computed_pos, pos, sizeof(Pos), nBodies);
         write_values_to_file(computed_vel, vel, sizeof(Vel), nBodies);
@@ -211,8 +233,8 @@ int main(int argc, char **argv) {
     starpu_data_unregister(vel_handle);
 
     if (rank == 0) {
-        starpu_free_noflag(pos, sizeof(Pos) * nBodies);
-        starpu_free_noflag(vel, sizeof(Vel) * nBodies);
+        starpu_free_flags(pos, sizeof(Pos) * nBodies, STARPU_MALLOC_PINNED);
+        starpu_free_flags(vel, sizeof(Vel) * nBodies, STARPU_MALLOC_PINNED);
     }
     free(pos_handles);
     free(vel_handles);

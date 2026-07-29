@@ -70,14 +70,16 @@ extern "C" void bodyForce_hip(void *buffers[], void *_args) {
     unsigned int offset = STARPU_VECTOR_GET_OFFSET(buffers[1]) / sizeof(Vel);
 
     unsigned threads_per_block = 64;
-    unsigned nblocks = 60;
+    unsigned nblocks = (nVel + threads_per_block - 1) / threads_per_block;
 
     bodyForce<<<nblocks,
                 threads_per_block,
                 0,
                 starpu_hip_get_local_stream()>>>(p, v, nPos, nVel, offset);
 
-    hipStreamSynchronize(starpu_hip_get_local_stream());
+    hipError_t status = hipGetLastError();
+    if (status != hipSuccess)
+        STARPU_HIP_REPORT_ERROR(status);
 }
 
 extern "C" void integratePositions_hip(void *buffers[], void *_args) {
@@ -98,5 +100,7 @@ extern "C" void integratePositions_hip(void *buffers[], void *_args) {
                          0,
                          starpu_hip_get_local_stream()>>>(p, v, nVel);
 
-    hipStreamSynchronize(starpu_hip_get_local_stream());
+    hipError_t status = hipGetLastError();
+    if (status != hipSuccess)
+        STARPU_HIP_REPORT_ERROR(status);
 }
