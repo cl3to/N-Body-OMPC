@@ -79,9 +79,11 @@ static struct starpu_codelet integratePositions_cl = {
 };
 
 int main(int argc, char **argv) {
-    int rank, ret, nPartitions;
+    int rank, size, ret, nPartitions;
+    int local_rank;
+    int hip_devices;
+    MPI_Comm local_comm;
     int nBodies = 2 << 12;
-    int size = 1;
     Pos *pos;
     Vel *vel;
     starpu_mpi_tag_t tag = 0;
@@ -102,15 +104,43 @@ int main(int argc, char **argv) {
     const char *computed_vel = "../debug/computed_vel_12";
 #endif
 
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_split_type(MPI_COMM_WORLD,
+                        MPI_COMM_TYPE_SHARED,
+                        0,
+                        MPI_INFO_NULL,
+                        &local_comm);
+    MPI_Comm_rank(local_comm, &local_rank);
+
+    hipError_t hip_status = hipGetDeviceCount(&hip_devices);
+    if (hip_status != hipSuccess || hip_devices == 0) {
+        fprintf(stderr,
+                "MPI rank %d: no HIP devices are available on this node\n",
+                rank);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    if (hip_devices > 1 && local_rank >= hip_devices) {
+        fprintf(stderr,
+                "MPI rank %d: local rank %d requires a HIP device, but only "
+                "%d devices are available on this node\n",
+                rank,
+                local_rank,
+                hip_devices);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
     setbuf(stdout, NULL);
     struct starpu_conf conf;
     starpu_conf_init(&conf);
     conf.sched_policy_name = "dmdar";
     conf.ncpus = 1;
+    conf.nhip = 1;
+    conf.use_explicit_workers_hip_gpuid = 1;
+    conf.workers_hip_gpuid[0] = hip_devices == 1 ? 0 : local_rank;
 
-    starpu_mpi_init_conf(&argc, &argv, 1, MPI_COMM_WORLD, &conf);
-    starpu_mpi_comm_rank(MPI_COMM_WORLD, &rank);
-    starpu_mpi_comm_size(MPI_COMM_WORLD, &size);
+    starpu_mpi_init_conf(&argc, &argv, 0, MPI_COMM_WORLD, &conf);
 
     nPartitions = size * STARPU_PARTITIONS_PER_RANK;
     if (nPartitions > nBodies) {
@@ -240,4 +270,6 @@ int main(int argc, char **argv) {
     free(vel_handles);
 
     starpu_mpi_shutdown();
+    MPI_Comm_free(&local_comm);
+    MPI_Finalize();
 }
