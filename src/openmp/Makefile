@@ -5,7 +5,7 @@ OMP_TARGET ?= nvptx64
 GPU_ARCH ?= sm_80
 
 BASE_CFLAGS = -fopenmp -O3 -Wall -std=c99
-OFFLOAD_CFLAGS_CLANG = -fopenmp-targets=$(OMP_TARGET)
+OFFLOAD_CFLAGS_CLANG = -fopenmp-targets=$(OMP_TARGET) \
 	-Xopenmp-target=$(OMP_TARGET) -march=$(GPU_ARCH)
 LDFLAGS = -lm
 PYTHON ?= python3

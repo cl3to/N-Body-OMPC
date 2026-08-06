@@ -165,17 +165,26 @@ int main(int argc, char **argv) {
     const int nIters = 10;
 
 
-    for (int iter = 0; iter < nIters; iter++) {
-        bodyForce_mpi(global_pos, local_vel, local_start, local_n, nBodies);
-        integratePositions_mpi(local_pos, local_vel, local_n);
-        MPI_Allgatherv(local_pos,
-                       local_n,
-                       MPI_Pos,
-                       global_pos,
-                       sendCounts,
-                       displs,
-                       MPI_Pos,
-                       MPI_COMM_WORLD);
+#pragma omp target data device(gpu_device) \
+    map(to : global_pos[0 : nBodies]) \
+    map(tofrom : local_pos[0 : local_n]) \
+    map(tofrom : local_vel[0 : local_n])
+    {
+        for (int iter = 0; iter < nIters; iter++) {
+            bodyForce_mpi(global_pos, local_vel, local_start, local_n, nBodies);
+            integratePositions_mpi(local_pos, local_vel, local_n);
+#pragma omp taskwait
+#pragma omp target update device(gpu_device) from(local_pos[0 : local_n])
+            MPI_Allgatherv(local_pos,
+                           local_n,
+                           MPI_Pos,
+                           global_pos,
+                           sendCounts,
+                           displs,
+                           MPI_Pos,
+                           MPI_COMM_WORLD);
+#pragma omp target update device(gpu_device) to(global_pos[0 : nBodies])
+        }
     }
     MPI_Gatherv(local_vel,
                 local_n,
