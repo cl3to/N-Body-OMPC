@@ -11,6 +11,9 @@ PARTITIONS_PER_RANK ?= 4
 CFLAGS += -fopenmp -O3 -Wall -Wextra
 CFLAGS += -fopenmp-targets=$(OMP_TARGET) -Xopenmp-target=$(OMP_TARGET) -march=$(GPU_ARCH)
 CFLAGS += -DSTARPU_PARTITIONS_PER_RANK=$(PARTITIONS_PER_RANK)
+# starpu.h pulls in hip_runtime.h via starpu_data_interfaces.h; define the AMD
+# HIP platform so those headers parse even though we only use OpenMP target.
+CFLAGS += -D__HIP_PLATFORM_AMD__=1 -D__HIP_PLATFORM_HCC__=1
 ifeq ($(DEBUG),1)
 CFLAGS += -DDEBUG
 endif

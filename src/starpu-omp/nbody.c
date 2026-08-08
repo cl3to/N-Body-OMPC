@@ -15,13 +15,6 @@
  * See the GNU Lesser General Public License in COPYING.LGPL for more details.
  */
 
-/*
- * This example demonstrates how to use StarPU to scale an array by a factor.
- * It shows how to manipulate data with StarPU's data management library.
- *  1- how to declare a piece of data to StarPU (starpu_vector_data_register)
- *  2- how to submit a task to StarPU
- *  3- how a kernel can manipulate the data (buffers[0].vector.ptr)
- */
 #include <starpu.h>
 #include <starpu_mpi.h>
 #include <omp.h>
@@ -31,8 +24,6 @@
 
 // #define DEBUG
 
-// More than one tile per MPI rank gives StarPU enough ready work to schedule
-// and pipeline while keeping the total amount of body-force work unchanged.
 #ifndef STARPU_PARTITIONS_PER_RANK
 #define STARPU_PARTITIONS_PER_RANK 1
 #endif
@@ -41,9 +32,7 @@
 #error "STARPU_PARTITIONS_PER_RANK must be at least 1"
 #endif
 
-extern void bodyForce_cpu(void *buffers[], void *_args);
 extern void bodyForce_gpu(void *buffers[], void *_args);
-extern void integratePositions_cpu(void *buffers[], void *_args);
 extern void integratePositions_gpu(void *buffers[], void *_args);
 
 static struct starpu_perfmodel bodyforce_perfmodel = {
@@ -53,10 +42,8 @@ static struct starpu_perfmodel integratepositions_perfmodel = {
     .type = STARPU_HISTORY_BASED, .symbol = "integratepositions"};
 
 static struct starpu_codelet bodyForce_cl = {
-    // StarPU's CPU worker invokes the OpenMP target callback. StarPU itself
-    // does not schedule a CUDA/HIP worker for this implementation.
-    .cpu_funcs = {bodyForce_gpu},
-    .where = STARPU_CPU,
+    .hip_funcs = {bodyForce_gpu},
+    .where = STARPU_HIP,
     .max_parallelism = INT_MAX,
     .nbuffers = 2,
     .modes = {STARPU_R, STARPU_RW},
@@ -64,8 +51,8 @@ static struct starpu_codelet bodyForce_cl = {
 };
 
 static struct starpu_codelet integratePositions_cl = {
-    .cpu_funcs = {integratePositions_gpu},
-    .where = STARPU_CPU,
+    .hip_funcs = {integratePositions_gpu},
+    .where = STARPU_HIP,
     .max_parallelism = INT_MAX,
     .nbuffers = 2,
     .modes = {STARPU_RW, STARPU_R},
@@ -76,8 +63,8 @@ int main(int argc, char **argv) {
     int rank, ret, nPartitions;
     int nBodies = 2 << 12;
     int size = 1;
-    Pos *pos;
-    Vel *vel;
+    Pos *pos = NULL;
+    Vel *vel = NULL;
     starpu_mpi_tag_t tag = 0;
 
 #ifndef DEBUG
@@ -97,26 +84,10 @@ int main(int argc, char **argv) {
 #endif
 
     setbuf(stdout, NULL);
-    struct starpu_conf conf;
-    starpu_conf_init(&conf);
-    conf.sched_policy_name = "dmda";
-    conf.ncpus = 1;
 
-    starpu_mpi_init_conf(&argc, &argv, 1, MPI_COMM_WORLD, &conf);
-    starpu_mpi_comm_rank(MPI_COMM_WORLD, &rank);
-    starpu_mpi_comm_size(MPI_COMM_WORLD, &size);
-
-    // Use several tiles per rank. The tiles are assigned round-robin below,
-    // so every rank still processes N/size bodies in total.
-    nPartitions = size * STARPU_PARTITIONS_PER_RANK;
-    if (nPartitions > nBodies) {
-        fprintf(stderr,
-                "MPI rank %d: %d partitions cannot be created for %d bodies\n",
-                rank,
-                nPartitions,
-                nBodies);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     int num_devices = omp_get_num_devices();
     if (num_devices == 0) {
@@ -124,6 +95,32 @@ int main(int argc, char **argv) {
                 "MPI rank %d can see no OpenMP target devices; a GPU is "
                 "required.\n",
                 rank);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    struct starpu_conf conf;
+    starpu_conf_init(&conf);
+    conf.sched_policy_name = "dmdar";
+    conf.ncpus = 4;
+    // One HIP worker per visible GPU so StarPU schedules across all of them.
+    conf.nhip = num_devices;
+
+    starpu_mpi_init_conf(&argc, &argv, 0, MPI_COMM_WORLD, &conf);
+    starpu_mpi_comm_rank(MPI_COMM_WORLD, &rank);
+    starpu_mpi_comm_size(MPI_COMM_WORLD, &size);
+
+    // Give StarPU enough tiles per rank to keep every GPU busy. At least one
+    // tile per GPU; allow more via STARPU_PARTITIONS_PER_RANK for pipelining.
+    int partitions_per_rank = STARPU_PARTITIONS_PER_RANK;
+    if (partitions_per_rank < num_devices)
+        partitions_per_rank = num_devices;
+    nPartitions = size * partitions_per_rank;
+    if (nPartitions > nBodies) {
+        fprintf(stderr,
+                "MPI rank %d: %d partitions cannot be created for %d bodies\n",
+                rank,
+                nPartitions,
+                nBodies);
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
@@ -148,7 +145,6 @@ int main(int argc, char **argv) {
 #endif
     }
 
-    // vectors are allocated in rank 0
     int memory_region = (rank == 0) ? STARPU_MAIN_RAM : -1;
     uintptr_t pos_ptr = (rank == 0) ? (uintptr_t)pos : 0;
     uintptr_t vel_ptr = (rank == 0) ? (uintptr_t)vel : 0;
@@ -166,11 +162,11 @@ int main(int argc, char **argv) {
     starpu_data_handle_t *vel_handles = (starpu_data_handle_t *)malloc(
         sizeof(starpu_data_handle_t) * nPartitions);
 
-    // tagging mpi data
+    // Tagging MPI data
     starpu_mpi_data_register(pos_handle, tag++, 0);
     starpu_mpi_data_register(vel_handle, tag++, 0);
 
-    // async partitioning vectors
+    // Async partitioning vectors
     struct starpu_data_filter filter = {
         .filter_func = starpu_vector_filter_block, .nchildren = nPartitions};
     starpu_data_partition_plan(pos_handle, &filter, pos_handles);
@@ -238,11 +234,8 @@ int main(int argc, char **argv) {
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
         }
-
     }
-    
-    // Do not submit the next iteration until all child position updates
-    // from this iteration are visible to the parent position handle.
+
     starpu_task_wait_for_all();
 
     starpu_data_unpartition_submit(vel_handle, nPartitions, vel_handles, -1);
@@ -253,10 +246,10 @@ int main(int argc, char **argv) {
     if (rank == 0) {
         starpu_data_acquire(pos_handle, STARPU_R);
         starpu_data_acquire(vel_handle, STARPU_R);
-        pos = starpu_data_get_local_ptr(pos_handle);
-        vel = starpu_data_get_local_ptr(vel_handle);
+        pos = (Pos *)starpu_data_get_local_ptr(pos_handle);
+        vel = (Vel *)starpu_data_get_local_ptr(vel_handle);
         double timing = (starpu_timing_now() - start) / 1.0e6;
-        printf("runtime: %lf\n", timing); // seconds, matching src/openmp
+        printf("runtime: %lf\n", timing);
 #ifdef DEBUG
         write_values_to_file(computed_pos, pos, sizeof(Pos), nBodies);
         write_values_to_file(computed_vel, vel, sizeof(Vel), nBodies);
@@ -276,4 +269,5 @@ int main(int argc, char **argv) {
     free(vel_handles);
 
     starpu_mpi_shutdown();
+    return 0;
 }

@@ -121,13 +121,14 @@ int main(int argc, char **argv) {
                 rank);
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
-    if (hip_devices > 1 && local_rank >= hip_devices) {
+    // One MPI process per node owns all visible GPUs. StarPU schedules codelets
+    // across all of them, so we do not pin a single device per rank.
+    if (local_rank != 0) {
         fprintf(stderr,
-                "MPI rank %d: local rank %d requires a HIP device, but only "
-                "%d devices are available on this node\n",
+                "MPI rank %d: this implementation expects one MPI process per "
+                "node (local_rank 0); local_rank is %d\n",
                 rank,
-                local_rank,
-                hip_devices);
+                local_rank);
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
@@ -136,13 +137,19 @@ int main(int argc, char **argv) {
     starpu_conf_init(&conf);
     conf.sched_policy_name = "dmdar";
     conf.ncpus = 1;
-    conf.nhip = 1;
-    conf.use_explicit_workers_hip_gpuid = 1;
-    conf.workers_hip_gpuid[0] = hip_devices == 1 ? 0 : local_rank;
+    // Register every visible HIP device with StarPU so its scheduler can
+    // distribute codelets across all node GPUs.
+    conf.nhip = hip_devices;
+    conf.use_explicit_workers_hip_gpuid = 0;
 
     starpu_mpi_init_conf(&argc, &argv, 0, MPI_COMM_WORLD, &conf);
 
-    nPartitions = size * STARPU_PARTITIONS_PER_RANK;
+    // Give StarPU enough tiles per rank to keep all GPUs busy. At least one
+    // tile per GPU; allow more via STARPU_PARTITIONS_PER_RANK for pipelining.
+    int partitions_per_rank = STARPU_PARTITIONS_PER_RANK;
+    if (partitions_per_rank < hip_devices)
+        partitions_per_rank = hip_devices;
+    nPartitions = size * partitions_per_rank;
     if (nPartitions > nBodies) {
         fprintf(stderr,
                 "MPI rank %d: %d partitions cannot be created for %d bodies\n",

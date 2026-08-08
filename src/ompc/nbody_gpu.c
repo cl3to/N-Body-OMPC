@@ -4,9 +4,13 @@
 
 void bodyForce_gpu(
     Pos *global_pos, Vel *local_vel, int local_start, int local_n, int n, int Device) {
-    #pragma omp target teams distribute parallel for device(Device)\
+    int num_threads = 64;
+    int num_blocks = (local_n + num_threads - 1) / num_threads;
+
+    #pragma omp target teams distribute parallel for device(Device) \
             is_device_ptr(global_pos, local_vel) \
-            firstprivate(local_start, local_n, n) thread_limit(64)
+            firstprivate(local_start, local_n, n) \
+            thread_limit(num_threads) num_teams(num_blocks)
     for (int i = 0; i < local_n; i++) {
         float Fx = 0.0f;
         float Fy = 0.0f;
